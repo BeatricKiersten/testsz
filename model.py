@@ -156,12 +156,15 @@ class GQAAttention(nn.Module):
 
         # Convert padding mask: (B,T) long → (B,1,1,T) float (FP16-compatible)
         if attention_mask is not None and attention_mask.dtype in (torch.long, torch.int, torch.int32, torch.int64):
-            attn_mask = (1.0 - attention_mask.float()) * float('-inf')
-            attn_mask = attn_mask.unsqueeze(1).unsqueeze(1).to(q.dtype)
+            # HINDARI 0 * -inf = NaN → pakai where()
+            attn_mask = torch.where(
+                attention_mask.bool().unsqueeze(1).unsqueeze(1),
+                0.0, float('-inf')
+            ).to(q.dtype)
         else:
             attn_mask = attention_mask
 
-        is_causal = (attn_mask is None and T == T_full)
+        is_causal = (T == T_full)  # causal during prefill; decode handles it via cache
         if self.use_flash:
             y = F.scaled_dot_product_attention(
                 q, k, v,
