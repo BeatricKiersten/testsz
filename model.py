@@ -154,11 +154,18 @@ class GQAAttention(nn.Module):
         # Flash Attention
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
 
-        is_causal = (attention_mask is None and T == T_full)
+        # Convert padding mask: (B,T) long → (B,1,1,T) float (FP16-compatible)
+        if attention_mask is not None and attention_mask.dtype in (torch.long, torch.int, torch.int32, torch.int64):
+            attn_mask = (1.0 - attention_mask.float()) * float('-inf')
+            attn_mask = attn_mask.unsqueeze(1).unsqueeze(1).to(q.dtype)
+        else:
+            attn_mask = attention_mask
+
+        is_causal = (attn_mask is None and T == T_full)
         if self.use_flash:
             y = F.scaled_dot_product_attention(
                 q, k, v,
-                attn_mask=None if is_causal else attention_mask.unsqueeze(1).unsqueeze(1) if attention_mask is not None else None,
+                attn_mask=attn_mask,
                 dropout_p=self.attn_dropout if self.training else 0.0,
                 is_causal=is_causal,
             )
@@ -168,8 +175,8 @@ class GQAAttention(nn.Module):
             if is_causal:
                 causal = torch.triu(torch.full((T, T_full), float('-inf'), device=x.device), diagonal=T_full - T + 1)
                 attn = attn + causal.unsqueeze(0).unsqueeze(0)
-            if attention_mask is not None:
-                attn = attn + attention_mask.unsqueeze(1).unsqueeze(1)
+            if attn_mask is not None:
+                attn = attn + attn_mask
             attn = F.softmax(attn, dim=-1, dtype=torch.float32).to(x.dtype)
             if self.attn_dropout > 0 and self.training:
                 attn = F.dropout(attn, p=self.attn_dropout)
