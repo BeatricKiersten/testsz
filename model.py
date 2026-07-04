@@ -37,8 +37,9 @@ class RotaryEmbedding(nn.Module):
     def forward(self, x: torch.Tensor):
         seq_len = x.shape[1]
         self._build_cache(seq_len, x.device)
-        cos = self._cos_cached[:seq_len].unsqueeze(0).unsqueeze(0)
-        sin = self._sin_cached[:seq_len].unsqueeze(0).unsqueeze(0)
+        # (1, T, 1, head_dim) — broadcast across batch × heads
+        cos = self._cos_cached[:seq_len].unsqueeze(0).unsqueeze(2)
+        sin = self._sin_cached[:seq_len].unsqueeze(0).unsqueeze(2)
         return cos, sin
 
 
