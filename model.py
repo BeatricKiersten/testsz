@@ -147,9 +147,9 @@ class GQAAttention(nn.Module):
 
         # Expand KV → Query heads (GQA repeat)
         if self.n_rep > 1:
-            # (B, T, n_kv, d) → (B, T, n_heads, d)
-            k = k.unsqueeze(2).expand(-1, -1, self.n_rep, -1).reshape(B, T_full, self.n_heads, self.head_dim)
-            v = v.unsqueeze(2).expand(-1, -1, self.n_rep, -1).reshape(B, T_full, self.n_heads, self.head_dim)
+            # (B, T, n_kv, d) → unsqueeze(1) → (B, T, 1, n_kv, d) → expand → reshape
+            k = k.unsqueeze(2).expand(-1, -1, self.n_rep, -1, -1).reshape(B, T_full, self.n_heads, self.head_dim)
+            v = v.unsqueeze(2).expand(-1, -1, self.n_rep, -1, -1).reshape(B, T_full, self.n_heads, self.head_dim)
 
         # Flash Attention
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
