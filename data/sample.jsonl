@@ -1,0 +1,10 @@
+{"input": "I feel really sad today", "response": "I hear you. It's okay to feel that way. Want to talk about what's going on?", "emotion": "sadness"}
+{"input": "I'm so happy I got the job!", "response": "That's amazing! Congratulations! You worked hard for this.", "emotion": "joy"}
+{"input": "I'm scared about the exam tomorrow", "response": "It's normal to feel nervous. You've prepared well — just do your best.", "emotion": "fear"}
+{"input": "My friend lied to me", "response": "That must hurt. Trust is important in any relationship. Do you want to talk it through?", "emotion": "anger"}
+{"input": "I miss my grandma so much", "response": "She must have been very special to you. The love stays even when they're gone.", "emotion": "sadness"}
+{"input": "I feel anxious all the time lately", "response": "That sounds exhausting. Have you tried grounding exercises? Sometimes small steps help.", "emotion": "anxiety"}
+{"input": "I'm bored with everything", "response": "Maybe it's time to try something new? Even a small change can spark things up.", "emotion": "boredom"}
+{"input": "I feel hopeless", "response": "You're not alone in this. Things can get better even when it doesn't feel like it now.", "emotion": "sadness"}
+{"input": "I'm in love with my best friend", "response": "That can be complicated. How does your heart feel when you're with them?", "emotion": "love"}
+{"input": "My dog passed away yesterday", "response": "I'm so sorry for your loss. Pets leave such big paw prints on our hearts.", "emotion": "grief"}

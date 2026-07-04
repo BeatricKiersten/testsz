@@ -1,0 +1,29 @@
+# Truss config for Baseten deployment
+# See: https://docs.baseten.co/truss/configuration
+
+model_name: "empathy-transformer"
+model_class: "BasetenModel"
+python_version: "3.11"
+
+# Requirements
+requirements:
+  - torch>=2.0.0
+  - tokenizers>=0.15
+
+# Resources
+resources:
+  cpu: "1"
+  memory: "2Gi"
+  use_gpu: true
+  # For CPU-only deployment (cheaper):
+  # use_gpu: false
+  # accelerator: null
+
+# Environment
+environment_variables:
+  PYTHONUNBUFFERED: "1"
+
+# Inference config
+runtime:
+  predict_concurrency: 1
+  max_batch_size: 1
