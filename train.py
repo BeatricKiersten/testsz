@@ -81,7 +81,7 @@ def validate(model, val_loader, device, loss_fn, use_amp=False):
         input_ids = batch['input_ids'].to(device)
         attention_mask = batch['attention_mask'].to(device)
 
-        with torch.cuda.amp.autocast(enabled=use_amp):
+        with torch.amp.autocast('cuda', enabled=use_amp):
             logits, _ = model(input_ids, attention_mask)
 
         shift_logits = logits[:, :-1, :].contiguous()
@@ -215,7 +215,7 @@ def train(args):
     loss_fn = nn.CrossEntropyLoss(reduction='none')
 
     # AMP scaler
-    scaler = torch.cuda.amp.GradScaler(enabled=(amp_dtype == torch.float16))
+    scaler = torch.amp.GradScaler('cuda', enabled=(amp_dtype == torch.float16))
 
     # Resume
     start_step = 0
@@ -260,7 +260,7 @@ def train(args):
 
         for i, batch in enumerate(train_loader):
             # Forward + backward with AMP
-            with torch.cuda.amp.autocast(enabled=(amp_dtype is not None), dtype=amp_dtype):
+            with torch.amp.autocast('cuda', enabled=(amp_dtype is not None), dtype=amp_dtype):
                 loss = train_step(model, batch, device, loss_fn)
                 loss = loss / accum_steps
 

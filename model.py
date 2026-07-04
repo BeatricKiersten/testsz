@@ -314,7 +314,7 @@ class EmpathyTransformer(nn.Module):
                 # Thinking loop — no cache inside
                 x = block(x, attention_mask)
                 kv = None
-            elif require_grad and self.config.get('gradient_checkpointing', False):
+            elif require_grad and getattr(self.config, 'gradient_checkpointing', False):
                 x, kv = torch.utils.checkpoint.checkpoint(
                     block, x, attention_mask, pkv, use_cache, use_reentrant=False
                 )
