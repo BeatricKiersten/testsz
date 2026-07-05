@@ -52,7 +52,7 @@ def download_cosmopedia(output_path: str, max_samples: int = 30000, subset_size:
                 print(f"  Downloaded {count}/{max_samples}")
 
     print(f"Saved {count} samples to {output_path}")
-    size_mb = output_path.stat().st_size / 1024 / 1024
+    size_mb = out_path.stat().st_size / 1024 / 1024
     print(f"File size: {size_mb:.1f} MB")
 
     return count
@@ -108,7 +108,7 @@ def merge_with_existing(new_data_path: str, existing_data_paths: list, output_pa
         for line in all_lines:
             f.write(line + '\n')
 
-    print(f"Merged {len(all_lines)} samples to {output_path}")
+    print(f"Merged {len(all_lines)} samples to {out_path}")
 
 
 if __name__ == '__main__':
