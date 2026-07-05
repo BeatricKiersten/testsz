@@ -222,7 +222,7 @@ def train(args):
     start_epoch = 0
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
-        model.load_state_dict(ckpt['model_state_dict'])
+        raw_model.load_state_dict(ckpt['model_state_dict'])
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         if 'amp_scaler' in ckpt and scaler.is_enabled():
             scaler.load_state_dict(ckpt['amp_scaler'])
