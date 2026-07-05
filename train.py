@@ -187,7 +187,8 @@ def train(args):
     print(f"Actual params: {info['total']:,} ({info['size_mb']:.2f}MB)")
 
     if args.amp:
-        amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        # T4 (SM 7.5) gak punya bf16 tensor cores — pake fp16
+        amp_dtype = torch.float16 if torch.cuda.get_device_capability(0) < (8, 0) else torch.bfloat16
         print(f"AMP enabled: {amp_dtype}")
     else:
         amp_dtype = None
