@@ -1,5 +1,5 @@
 """
-EmpathyTransformer V3 — dengan KV Cache, Fused QKV, depth-thinking loop.
+EmpathyTransformer V4 — Peri-LN, QKV-norm, scaled emb, sliding window, KV cache.
 """
 
 import math
@@ -37,7 +37,6 @@ class RotaryEmbedding(nn.Module):
     def forward(self, x: torch.Tensor):
         seq_len = x.shape[1]
         self._build_cache(seq_len, x.device)
-        # (1, T, 1, head_dim) — broadcast across batch × heads
         cos = self._cos_cached[:seq_len].unsqueeze(0).unsqueeze(2)
         sin = self._sin_cached[:seq_len].unsqueeze(0).unsqueeze(2)
         return cos, sin
@@ -87,30 +86,38 @@ class SwiGLU(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# GQA Attention — Fused QKV + KV Cache + Flash Attention
+# GQA Attention V4 — fused QKV + QKV-norm + KV Cache + sliding window
 # ---------------------------------------------------------------------------
 
 class GQAAttention(nn.Module):
-    """Grouped Query Attention dengan fused QKV proj, KV cache, Flash Attn."""
+    """Grouped Query Attention with fused QKV, QKV-norm, KV cache, sliding window."""
 
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: ModelConfig, layer_idx: int = 0):
         super().__init__()
         self.n_heads = config.n_heads
         self.n_kv_heads = config.n_kv_heads
         self.head_dim = config.d_model // config.n_heads
         self.n_rep = self.n_heads // self.n_kv_heads
 
-        # Fused QKV: satu matriks besar, di-slice jadi Q, K, V
+        # Fused QKV
         q_dim = config.d_model
         kv_dim = self.n_kv_heads * self.head_dim
         self.qkv_proj = nn.Linear(config.d_model, q_dim + kv_dim + kv_dim, bias=config.bias)
         self.o_proj = nn.Linear(config.d_model, config.d_model, bias=config.bias)
 
+        # V4: QKV-norm — RMSNorm per proyeksi
+        self.q_norm = RMSNorm(q_dim) if config.qkv_norm else nn.Identity()
+        self.k_norm = RMSNorm(kv_dim) if config.qkv_norm else nn.Identity()
+        self.v_norm = RMSNorm(kv_dim) if config.qkv_norm else nn.Identity()
+
         self.attn_dropout = config.attn_dropout
         self.use_flash = config.use_flash_attn and torch.cuda.is_available()
         self.rotary = RotaryEmbedding(self.head_dim, config.max_seq_len)
 
-        # Kv cache offset tracker (buat generate)
+        # V4: Sliding window — global every N layers, window for rest
+        self.is_global = (layer_idx % config.sliding_window_every == 0)
+        self.sliding_window = 0 if self.is_global else config.sliding_window_size
+
         self._cache_offset = 0
 
     def forward(
@@ -122,11 +129,16 @@ class GQAAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
         B, T, C = x.shape
 
-        # Fused QKV: satu matriks → slice
+        # Fused QKV
         qkv = self.qkv_proj(x)
         q_dim = self.n_heads * self.head_dim
         kv_dim = self.n_kv_heads * self.head_dim
         q, k, v = qkv.split([q_dim, kv_dim, kv_dim], dim=-1)
+
+        # V4: QKV-norm — normalize per proyeksi sebelum reshape
+        q = self.q_norm(q)
+        k = self.k_norm(k)
+        v = self.v_norm(v)
 
         q = q.view(B, T, self.n_heads, self.head_dim)
         k = k.view(B, T, self.n_kv_heads, self.head_dim)
@@ -143,20 +155,17 @@ class GQAAttention(nn.Module):
             v = torch.cat([v_cached, v], dim=1)
 
         present_kv = (k, v) if use_cache else None
-        T_full = k.shape[1]  # length after cache concat
+        T_full = k.shape[1]
 
-        # Expand KV → Query heads (GQA repeat)
+        # GQA repeat
         if self.n_rep > 1:
-            # (B, T, n_kv, d) → unsqueeze(1) → (B, T, 1, n_kv, d) → expand → reshape
             k = k.unsqueeze(2).expand(-1, -1, self.n_rep, -1, -1).reshape(B, T_full, self.n_heads, self.head_dim)
             v = v.unsqueeze(2).expand(-1, -1, self.n_rep, -1, -1).reshape(B, T_full, self.n_heads, self.head_dim)
 
-        # Flash Attention
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
 
-        # Convert padding mask: (B,T) long → (B,1,1,T) float (FP16-compatible)
+        # Padding mask
         if attention_mask is not None and attention_mask.dtype in (torch.long, torch.int, torch.int32, torch.int64):
-            # HINDARI 0 * -inf = NaN → pakai where()
             attn_mask = torch.where(
                 attention_mask.bool().unsqueeze(1).unsqueeze(1),
                 0.0, float('-inf')
@@ -164,8 +173,11 @@ class GQAAttention(nn.Module):
         else:
             attn_mask = attention_mask
 
-        is_causal = (T == T_full)  # causal during prefill; decode handles it via cache
+        is_causal = (T == T_full)  # prefill vs decode
+
         if self.use_flash:
+            # V4: sliding window via Flash Attention built-in support
+            window_size = (-1, -1) if self.is_global else (-1, self.sliding_window)
             y = F.scaled_dot_product_attention(
                 q, k, v,
                 attn_mask=attn_mask,
@@ -173,6 +185,7 @@ class GQAAttention(nn.Module):
                 is_causal=is_causal,
             )
         else:
+            # Manual attention (fallback)
             scale = 1.0 / math.sqrt(self.head_dim)
             attn = (q @ k.transpose(-2, -1)) * scale
             if is_causal:
@@ -190,16 +203,23 @@ class GQAAttention(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Transformer Block
+# Transformer Block V4 — Peri-LN
 # ---------------------------------------------------------------------------
 
 class TransformerBlock(nn.Module):
     def __init__(self, config: ModelConfig, layer_idx: int = 0):
         super().__init__()
+        # Pre-norm (standard)
         self.attn_norm = RMSNorm(config.d_model) if config.use_rmsnorm else nn.LayerNorm(config.d_model)
         self.ffn_norm = RMSNorm(config.d_model) if config.use_rmsnorm else nn.LayerNorm(config.d_model)
-        self.attn = GQAAttention(config)
+
+        # V4: Peri-LN — post-norm after each sublayer
+        self.post_attn_norm = RMSNorm(config.d_model) if config.peri_ln else nn.Identity()
+        self.post_ffn_norm = RMSNorm(config.d_model) if config.peri_ln else nn.Identity()
+
+        self.attn = GQAAttention(config, layer_idx)
         self.ffn = SwiGLU(config.d_model, config.d_ff, config.bias)
+        self.peri_ln = config.peri_ln
 
     def forward(
         self,
@@ -208,11 +228,13 @@ class TransformerBlock(nn.Module):
         past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+        # Peri-LN attention: x + post_norm(attn(norm(x)))
         residual = x
         x, present_kv = self.attn(self.attn_norm(x), attention_mask, past_key_value, use_cache)
-        x = residual + x
+        x = residual + (self.post_attn_norm(x) if self.peri_ln else x)
 
-        x = x + self.ffn(self.ffn_norm(x))
+        # Peri-LN FFN: x + post_norm(ffn(norm(x)))
+        x = x + (self.post_ffn_norm(self.ffn(self.ffn_norm(x))) if self.peri_ln else self.ffn(self.ffn_norm(x)))
         return x, present_kv
 
 
@@ -221,45 +243,36 @@ class TransformerBlock(nn.Module):
 # ---------------------------------------------------------------------------
 
 class ThinkingBlock(nn.Module):
-    """
-    Recurrent depth-thinking loop di latent space.
-    Loop hidden state melalui attention+ffn N kali dengan gated residual.
-
-    Gate init: sigmoid(2.0) ≈ 0.88 → pertahankan 88% identitas per loop.
-    """
     def __init__(self, block: TransformerBlock, d_model: int, thinking_steps: int = 4):
         super().__init__()
         self.block = block
         self.thinking_steps = thinking_steps
-        # Gate: sigmoid(weight) → 0.88 saat init
         self.gate = nn.Parameter(torch.full((1, 1, d_model), 2.0))
 
     def forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None):
         identity = x
         for _ in range(self.thinking_steps):
-            x_out, _ = self.block(x, attention_mask)  # no cache inside thinking loop
+            x_out, _ = self.block(x, attention_mask)
             gate = torch.sigmoid(self.gate)
-            x = gate * x_out + (1 - gate) * x  # gated residual
+            x = gate * x_out + (1 - gate) * x
         return x
 
 
 # ---------------------------------------------------------------------------
-# EmpathyTransformer V3
+# EmpathyTransformer V4
 # ---------------------------------------------------------------------------
 
 class EmpathyTransformer(nn.Module):
     """
-    Transformer causal + Fused QKV + KV Cache + depth-thinking loop.
-
-    Usage:
-        cfg = ModelConfig(thinking_steps=4)
-        model = EmpathyTransformer(cfg)
-        logits, past_kv = model(input_ids, use_cache=True)
+    V4 — Peri-LN, QKV-norm, scaled embedding, Pre-LN head, sliding window.
     """
 
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.config = config
+
+        # V4: Scaled embedding factor
+        self.emb_scale = math.sqrt(config.d_model) if config.scale_embedding else 1.0
 
         self.token_emb = nn.Embedding(config.vocab_size, config.d_model)
         self.dropout = nn.Dropout(config.dropout)
@@ -272,17 +285,18 @@ class EmpathyTransformer(nn.Module):
         # Depth-thinking loop (optional)
         self.thinking_steps = getattr(config, 'thinking_steps', 0)
         if self.thinking_steps > 0:
-            # Loop di layer tengah: layer [n_layers//4, n_layers//2)
             self.think_start = config.n_layers // 4
             self.think_end = min(config.n_layers // 2, config.n_layers)
-            # Ganti block di range itu jadi ThinkingBlock
             for i in range(self.think_start, self.think_end):
                 tw = ThinkingBlock(self.blocks[i], config.d_model, self.thinking_steps)
                 self.blocks[i] = tw
 
-        # Final norm
-        self.final_norm = RMSNorm(config.d_model) if config.use_rmsnorm else nn.LayerNorm(config.d_model)
+        # V4: Pre-LN head — norm SEBELUM lm_head
+        self.pre_head_norm = RMSNorm(config.d_model) if config.pre_ln_head else nn.Identity()
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
+
+        # Final norm (untuk training stabil, redundant kalo pre_ln_head=True)
+        self.final_norm = RMSNorm(config.d_model) if config.use_rmsnorm else nn.LayerNorm(config.d_model)
 
         if config.tie_weights:
             self.lm_head.weight = self.token_emb.weight
@@ -293,7 +307,7 @@ class EmpathyTransformer(nn.Module):
     def _init_weights(self):
         for name, p in self.named_parameters():
             if 'gate' in name:
-                nn.init.constant_(p, 2.0)  # sigmoid(2) = 0.88
+                nn.init.constant_(p, 2.0)
             elif p.ndim >= 2:
                 nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * self.config.n_layers))
             elif 'bias' in name:
@@ -312,7 +326,8 @@ class EmpathyTransformer(nn.Module):
         if past_key_values is None:
             past_key_values = [None] * len(self.blocks)
 
-        x = self.token_emb(input_ids)
+        # V4: Scaled embedding
+        x = self.token_emb(input_ids) * self.emb_scale
         x = self.dropout(x)
 
         new_past_key_values = [] if use_cache else None
@@ -322,7 +337,6 @@ class EmpathyTransformer(nn.Module):
             pkv = past_key_values[i] if past_key_values else None
 
             if isinstance(block, ThinkingBlock):
-                # Thinking loop — no cache inside
                 x = block(x, attention_mask)
                 kv = None
             elif require_grad and getattr(self.config, 'gradient_checkpointing', False):
@@ -336,6 +350,9 @@ class EmpathyTransformer(nn.Module):
                 new_past_key_values.append(kv)
 
         x = self.final_norm(x)
+
+        # V4: Pre-LN head
+        x = self.pre_head_norm(x)
         logits = self.lm_head(x)
         return logits, new_past_key_values if use_cache else None
 
@@ -349,11 +366,9 @@ class EmpathyTransformer(nn.Module):
         top_p: float = 0.9,
         eos_token_id: Optional[int] = None,
     ) -> torch.Tensor:
-        """Generate dengan KV cache — O(1) per token baru."""
         past_kv = None
         for _ in range(max_new_tokens):
             if input_ids.shape[1] > self.config.max_seq_len:
-                # Pindah sliding window
                 input_ids = input_ids[:, -self.config.max_seq_len:]
                 past_kv = None
 
@@ -401,17 +416,17 @@ if __name__ == '__main__':
     cfg = ModelConfig(vocab_size=4096, d_model=256, n_layers=6, n_heads=8,
                       n_kv_heads=4, d_ff=1024, max_seq_len=128,
                       thinking_steps=4)
-    # Enable gradient checkpointing
     cfg.gradient_checkpointing = True
     m = EmpathyTransformer(cfg)
     x = torch.randint(0, cfg.vocab_size, (2, 32))
     logits, kv = m(x, use_cache=True)
     print(f"Forward: {list(logits.shape)}, cache: {len(kv)} blocks")
 
-    # Test generate
     gen = m.generate(x[:, :5], max_new_tokens=10)
     print(f"Generate: {list(gen.shape)}")
 
     info = count_params(m)
     print(f"Params: {info['total']:,} ({info['size_mb']:.1f}MB)")
     print(f"Thinking steps: {cfg.thinking_steps}")
+    print(f"Peri-LN: {cfg.peri_ln}, QKV-norm: {cfg.qkv_norm}")
+    print(f"Scaled emb: {cfg.scale_embedding}, Pre-LN head: {cfg.pre_ln_head}")

@@ -1,5 +1,5 @@
 """
-Model configuration for EmpathyTransformer.
+Model configuration for EmpathyTransformer V4.
 Lightweight, fast, emotion-aware causal language model.
 """
 
@@ -12,39 +12,54 @@ class ModelConfig:
     # Architecture
     vocab_size: int = 16384
     d_model: int = 512
-    n_layers: int = 12          # 8 → 12 (deeper = better understanding)
+    n_layers: int = 12
     n_heads: int = 8
-    n_kv_heads: int = 4         # GQA: 8 query, 4 key/value (hemat memori 25%)
-    d_ff: int = 2048            # FFN inner dim (SwiGLU → actual hidden = 2/3 * d_ff)
+    n_kv_heads: int = 4         # GQA: 8 query, 4 key/value
+    d_ff: int = 2048            # SwiGLU → actual hidden = 2/3 * d_ff
     max_seq_len: int = 512
     dropout: float = 0.1
     attn_dropout: float = 0.0
 
-    # Efficiency
+    # V4 upgrades — Peri-LN, QKV-norm, sliding window
     use_rotary: bool = True
     use_rmsnorm: bool = True
     use_swiglu: bool = True
-    use_flash_attn: bool = True  # PyTorch SDPA (Flash Attention on CUDA)
+    use_flash_attn: bool = True
     bias: bool = False
     tie_weights: bool = True
 
+    # V4: Peri-LN — norm before AND after each sublayer (Gemma 2 style)
+    peri_ln: bool = True
+
+    # V4: QKV-norm — normalize Q, K, V projections before attention
+    qkv_norm: bool = True
+
+    # V4: Sliding window alternating — global every N layers
+    sliding_window_size: int = 256    # half of max_seq_len
+    sliding_window_every: int = 4     # global every 4 layers, window for rest
+
+    # V4: Scaled embedding — emb * sqrt(d_model)
+    scale_embedding: bool = True
+
+    # V4: Pre-LN head — RMSNorm before lm_head
+    pre_ln_head: bool = True
+
     # Training
-    learning_rate: float = 3e-4
-    weight_decay: float = 0.1
-    warmup_steps: int = 500
+    learning_rate: float = 1e-3
+    weight_decay: float = 0.03       # Power Lines paper: 0.01-0.05
+    warmup_steps: int = 200          # WSD: 5% of total
     beta1: float = 0.9
-    beta2: float = 0.95
-    batch_size: int = 16
-    grad_clip: float = 1.0
-    gradient_accumulation_steps: int = 4
+    beta2: float = 0.95             # Chinchilla + MiniCPM
+    batch_size: int = 16             # Increased from 8 — T4 16GB bisa
+    grad_clip: float = 1.0          # Wajib
 
     # Advanced
-    thinking_steps: int = 0       # 0 = off, 4 = depth-thinking loop 4x
-    gradient_checkpointing: bool = True  # hemat VRAM, lambat 20%
+    thinking_steps: int = 0
+    gradient_checkpointing: bool = True
 
     # Saving
     save_every: int = 500
-    log_every: int = 10
+    log_every: int = 5
 
     @property
     def total_params_est(self) -> int:
