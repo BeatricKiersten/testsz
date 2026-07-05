@@ -135,7 +135,7 @@ def save_checkpoint(model, raw_model, optimizer, scheduler, step, epoch, config,
     if amp_scaler is not None:
         ckpt['amp_scaler'] = amp_scaler.state_dict()
     torch.save(ckpt, path)
-    print(f"  Checkpoint saved: {path}")
+    print(f"  Checkpoint saved: {path}", flush=True)
 
 
 def train(args):
@@ -328,7 +328,8 @@ def train(args):
                         f"LR: {curr_lr:.2e} | "
                         f"Tok/s: {tokens_per_sec:.0f} | "
                         f"Drop: {current_dropout:.2f} | "
-                        f"Epoch: {epoch+1}/{args.epochs}"
+                        f"Epoch: {epoch+1}/{args.epochs}",
+                        flush=True,
                     )
                     save_checkpoint.last_loss = loss.item() * accum_steps
 
@@ -336,7 +337,7 @@ def train(args):
                 if global_step % args.val_every == 0:
                     val_loss, ppl = validate(model, val_loader, device, loss_fn,
                                             use_amp=(amp_dtype is not None))
-                    print(f"  >>> Validation — Loss: {val_loss:.4f}, Perplexity: {ppl:.2f}")
+                    print(f"  >>> Validation — Loss: {val_loss:.4f}, Perplexity: {ppl:.2f}", flush=True)
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
                         save_checkpoint(model, raw_model, optimizer, scheduler,
@@ -347,7 +348,7 @@ def train(args):
                     # Early stopping check
                     if val_loss > getattr(save_checkpoint, 'last_val_loss', float('inf')):
                         stuck_loss_counter += 1
-                        print(f"  >>> Val loss increased ({stuck_loss_counter}/{stuck_loss_threshold})")
+                        print(f"  >>> Val loss increased ({stuck_loss_counter}/{stuck_loss_threshold})", flush=True)
                         if stuck_loss_counter >= stuck_loss_threshold:
                             print("  >>> Early stopping triggered")
                             break
@@ -363,7 +364,7 @@ def train(args):
 
         # End of epoch
         avg_epoch_loss = epoch_loss / max(epoch_steps, 1)
-        print(f"  Epoch {epoch+1} done — Avg loss: {avg_epoch_loss:.4f}")
+        print(f"  Epoch {epoch+1} done — Avg loss: {avg_epoch_loss:.4f}", flush=True)
 
         # Save epoch checkpoint
         save_checkpoint(model, raw_model, optimizer, scheduler,
