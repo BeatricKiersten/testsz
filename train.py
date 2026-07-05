@@ -168,6 +168,7 @@ def train(args):
         thinking_steps=args.thinking_steps,
         gradient_checkpointing=args.grad_checkpoint,
         dropout=args.dropout,
+        scale_embedding=not args.no_scale_emb,
     )
     print(f"Model config: {cfg.total_params_est:,} estimated params")
     print(f" V4 features: Peri-LN={cfg.peri_ln}, QKV-norm={cfg.qkv_norm}, "
@@ -417,6 +418,8 @@ if __name__ == '__main__':
     parser.add_argument('--num-workers', type=int, default=2)
     parser.add_argument('--amp', action='store_true')
     parser.add_argument('--no-dp', action='store_true')
+    parser.add_argument('--no-scale-emb', action='store_true',
+                        help='Disable scaled embedding (emb * sqrt(d_model)) — avoids fp16 overflow')
     parser.add_argument('--grad-checkpoint', action='store_true')
 
     # Logging/saving
