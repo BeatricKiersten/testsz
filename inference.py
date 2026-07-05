@@ -27,7 +27,7 @@ from tokenizer import load_tokenizer, encode, decode
 
 def load_model(model_path: str, device: str = 'cpu') -> EmpathyTransformer:
     """Load trained model from checkpoint."""
-    ckpt = torch.load(model_path, map_location=device)
+    ckpt = torch.load(model_path, map_location=device, weights_only=False)
 
     # Try to load config from checkpoint dir
     ckpt_dir = os.path.dirname(model_path)
