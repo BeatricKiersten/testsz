@@ -165,7 +165,6 @@ def train(args):
         learning_rate=args.lr,
         batch_size=args.batch_size,
         warmup_steps=args.warmup_steps,
-        gradient_accumulation_steps=args.grad_accum,
         thinking_steps=args.thinking_steps,
         gradient_checkpointing=args.grad_checkpoint,
         dropout=args.dropout,
@@ -280,7 +279,7 @@ def train(args):
     model.train()
     global_step = start_step
     best_val_loss = float('inf')
-    accum_steps = cfg.gradient_accumulation_steps
+    accum_steps = args.grad_accum
     total_tokens_processed = 0
     t0 = time.time()
     stuck_loss_counter = 0  # early stopping helper
