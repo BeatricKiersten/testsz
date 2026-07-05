@@ -30,7 +30,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torch.optim.lr_scheduler import LambdaLR
 
 # Add project root
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -41,12 +41,14 @@ from dataset import EmpathyDataset, TextDataset
 
 
 def get_lr_scheduler(optimizer, warmup_steps: int, total_steps: int):
-    """Linear warmup + cosine decay."""
-    warmup = LinearLR(optimizer, start_factor=0.01, end_factor=1.0,
-                      total_iters=warmup_steps)
-    cosine = CosineAnnealingLR(optimizer, T_max=total_steps - warmup_steps)
-    return SequentialLR(optimizer, [warmup, cosine],
-                        milestones=[warmup_steps])
+    """Linear warmup + cosine decay in one LambdaLR (resume-safe)."""
+    def lr_lambda(step: int) -> float:
+        if step < warmup_steps:
+            return 0.01 + (1.0 - 0.01) * step / max(1, warmup_steps)
+        # Cosine decay from 1.0 → 0.0
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return max(0.001, 0.5 * (1.0 + math.cos(math.pi * progress)))
+    return LambdaLR(optimizer, lr_lambda)
 
 
 def train_step(model, batch, device, loss_fn):
